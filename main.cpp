@@ -4,26 +4,21 @@
 #include "flir_uvc.h"
 
 static LGFX        lcd;
-static LGFX_Sprite sprite(&lcd);
+static LGFX_Sprite flir_sprite(&lcd);
+
 #define DISP_W 320
 #define DISP_H 170
 static uint16_t frame_rgb[FLIR_FRAME_W * FLIR_FRAME_H];
 
 void onFlirFrame(const uint8_t* data, size_t len) {
   yuyv_to_rgb565(data, frame_rgb, FLIR_FRAME_W, FLIR_FRAME_H);
-  sprite.fillScreen(TFT_BLACK);
-  sprite.pushImageRotateZoom(
-    (float)(DISP_W / 2),
-    (float)(DISP_H / 2),
-    (float)(FLIR_FRAME_W / 2),
-    (float)(FLIR_FRAME_H / 2),
+  flir_sprite.pushImage(0, 0, FLIR_FRAME_W, FLIR_FRAME_H, frame_rgb);
+  flir_sprite.pushRotateZoom(
+    DISP_W / 2.0f,
+    DISP_H / 2.0f,
     0.0f,
     DISP_W / (float)FLIR_FRAME_W,
-    DISP_H / (float)FLIR_FRAME_H,
-    FLIR_FRAME_W,
-    FLIR_FRAME_H,
-    frame_rgb);
-  sprite.pushSprite(0, 0);
+    DISP_H / (float)FLIR_FRAME_H);
 }
 
 void setup() {
@@ -40,8 +35,8 @@ void setup() {
   lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   lcd.setTextSize(1);
   lcd.drawString("Connecte le FLIR One via OTG...", 10, 40);
-  sprite.setColorDepth(16);
-  sprite.createSprite(DISP_W, DISP_H);
+  flir_sprite.setColorDepth(16);
+  flir_sprite.createSprite(FLIR_FRAME_W, FLIR_FRAME_H);
   flir_uvc_init(onFlirFrame);
   Serial.println("[MAIN] Pret. Branche le FLIR One.");
 }
