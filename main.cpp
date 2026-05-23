@@ -13,15 +13,23 @@ void onFlirFrame(const uint8_t* data, size_t len) {
   yuyv_to_rgb565(data, frame_rgb, FLIR_FRAME_W, FLIR_FRAME_H);
   sprite.fillScreen(TFT_BLACK);
   sprite.pushImageRotateZoom(
-    DISP_W/2, DISP_H/2, FLIR_FRAME_W/2.0f, FLIR_FRAME_H/2.0f, 0.0f,
-    DISP_W/(float)FLIR_FRAME_W, DISP_H/(float)FLIR_FRAME_H,
-    frame_rgb, FLIR_FRAME_W, FLIR_FRAME_H, 0x0000);
+    (float)(DISP_W / 2),
+    (float)(DISP_H / 2),
+    (float)(FLIR_FRAME_W / 2),
+    (float)(FLIR_FRAME_H / 2),
+    0.0f,
+    DISP_W / (float)FLIR_FRAME_W,
+    DISP_H / (float)FLIR_FRAME_H,
+    FLIR_FRAME_W,
+    FLIR_FRAME_H,
+    frame_rgb);
   sprite.pushSprite(0, 0);
 }
 
 void setup() {
   Serial.begin(115200);
-  pinMode(15, OUTPUT); digitalWrite(15, HIGH);  // PWR_ON
+  pinMode(15, OUTPUT);
+  digitalWrite(15, HIGH);
   lcd.init();
   lcd.setRotation(1);
   lcd.setBrightness(220);
