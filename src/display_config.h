@@ -33,8 +33,8 @@ public:
     pcfg.panel_height    = 170;
     pcfg.memory_width    = 320;
     pcfg.memory_height   = 170;
-    pcfg.offset_x        = 35;
-    pcfg.offset_y        = 0;
+    pcfg.offset_x        = 0;
+    pcfg.offset_y        = 22;
     pcfg.offset_rotation = 1;
     pcfg.invert          = true;
     pcfg.readable        = false;
