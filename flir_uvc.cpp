@@ -14,7 +14,8 @@ static void bulk_cb(usb_transfer_t* xfer) {
     size_t len = xfer->actual_num_bytes;
     if (len > sizeof(s_buf)) len = sizeof(s_buf);
     memcpy(s_buf, xfer->data_buffer, len);
-    if (s_cb && len == FLIR_FRAME_BYTES) s_cb(s_buf, len);
+    // Accept frame sizes within 95% of expected size to handle minor variations
+    if (s_cb && len >= (FLIR_FRAME_BYTES * 95 / 100)) s_cb(s_buf, len);
   }
   if (s_connected) usb_host_transfer_submit(xfer);
 }
