@@ -1,77 +1,52 @@
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include "display_config.h"
-#include "flir_uvc.h"
 
 static LGFX lcd;
 
 #define DISP_W 320
 #define DISP_H 170
-static uint16_t frame_rgb[FLIR_FRAME_W * FLIR_FRAME_H];
 
-// Variable pour le message d'état à afficher
-static char status_message[64] = "Connecte le FLIR One via OTG...";
-static int status_y = 40;
-static uint16_t status_color = TFT_WHITE;
-static unsigned long last_update = 0;
-static bool flir_connected = false;
+// Variables de debug
+static char debug_lines[5][64];
+static int debug_line_idx = 0;
 
-// Fonction pour afficher les messages d'état sur l'écran
-void display_status(const char* msg, uint16_t color = TFT_WHITE) {
-  // Effacer l'ancienne ligne
-  lcd.fillRect(0, status_y, DISP_W, 20, TFT_BLACK);
+void add_debug(const char* text) {
+  Serial.println(text);
   
-  // Afficher le nouveau message
-  strncpy(status_message, msg, sizeof(status_message) - 1);
-  status_color = color;
+  // Effacer la ligne la plus ancienne et décaler
+  if (debug_line_idx >= 5) {
+    for (int i = 0; i < 4; i++) {
+      strcpy(debug_lines[i], debug_lines[i + 1]);
+    }
+    debug_line_idx = 4;
+  }
   
-  lcd.setTextColor(color, TFT_BLACK);
+  strncpy(debug_lines[debug_line_idx], text, sizeof(debug_lines[0]) - 1);
+  debug_line_idx++;
+  
+  // Afficher à l'écran
+  lcd.fillScreen(TFT_BLACK);
+  lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+  lcd.setTextSize(2);
+  lcd.drawString("FLIR Bridge", 10, 10);
+  
+  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   lcd.setTextSize(1);
-  lcd.drawString(status_message, 10, status_y);
-}
-
-// Fonction pour logger et afficher sur l'écran
-void log_screen(const char* msg, uint16_t color = TFT_WHITE) {
-  Serial.println(msg);
-  display_status(msg, color);
-  delay(100);
-}
-
-void onFlirFrame(const uint8_t* data, size_t len) {
-  // Afficher l'image thermique
-  yuyv_to_rgb565(data, frame_rgb, FLIR_FRAME_W, FLIR_FRAME_H);
-  lcd.pushImageRotateZoom(
-    (float)(DISP_W / 2),
-    (float)(DISP_H / 2),
-    (float)(FLIR_FRAME_W / 2),
-    (float)(FLIR_FRAME_H / 2),
-    0.0f,
-    DISP_W / (float)FLIR_FRAME_W,
-    DISP_H / (float)FLIR_FRAME_H,
-    FLIR_FRAME_W,
-    FLIR_FRAME_H,
-    frame_rgb
-  );
-  
-  // Afficher un indicateur en bas à droite
-  if (!flir_connected) {
-    flir_connected = true;
-    lcd.setTextColor(TFT_GREEN, TFT_BLACK);
-    lcd.setTextSize(1);
-    lcd.drawString("OK", 290, 155);
+  for (int i = 0; i < debug_line_idx; i++) {
+    lcd.drawString(debug_lines[i], 10, 40 + (i * 15));
   }
 }
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("\n\n[MAIN] === FLIR Bridge Starting ===");
+  Serial.println("\n\n=== FLIR Bridge - USB Test ===");
   
   pinMode(15, OUTPUT);
   digitalWrite(15, HIGH);
   delay(200);
   
-  Serial.println("[MAIN] Initializing LCD...");
   lcd.init();
   lcd.setRotation(1);
   lcd.setBrightness(255);
@@ -84,40 +59,60 @@ void setup() {
   lcd.fillScreen(TFT_BLUE);
   delay(300);
   
-  // Écran noir et titre
-  lcd.fillScreen(TFT_BLACK);
-  lcd.setTextColor(TFT_CYAN, TFT_BLACK);
-  lcd.setTextSize(2);
-  lcd.drawString("FLIR Bridge v1", 10, 10);
-  
-  log_screen("Init USB...", TFT_YELLOW);
+  add_debug("[1] LCD OK");
   delay(500);
   
-  flir_uvc_init(onFlirFrame);
+  add_debug("[2] USB init...");
+  delay(500);
   
-  log_screen("En attente du FLIR One...", TFT_WHITE);
-  Serial.println("[MAIN] Setup complete");
+  // Initialiser l'USB Host
+  usb_host_config_t cfg = { .intr_flags = ESP_INTR_FLAG_LEVEL1 };
+  usb_host_install(&cfg);
+  
+  add_debug("[3] USB Host installed");
+  delay(500);
+  
+  // Créer la tâche USB
+  xTaskCreatePinnedToCore([](void* arg) {
+    while (true) {
+      uint32_t f;
+      usb_host_lib_handle_events(portMAX_DELAY, &f);
+      if (f & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) usb_host_device_free_all();
+    }
+  }, "usb_task", 4096, nullptr, 5, nullptr, 0);
+  
+  add_debug("[4] USB Task created");
+  delay(500);
+  
+  // Enregistrer le client USB
+  usb_host_client_handle_t client = nullptr;
+  usb_host_client_config_t cc = {
+    .is_synchronous    = false,
+    .max_num_event_msg = 5,
+    .async = { 
+      .client_event_callback = [](const usb_host_client_event_msg_t* msg, void* arg) {
+        if (msg->event == USB_HOST_CLIENT_EVENT_NEW_DEV) {
+          add_debug("[USB] DEVICE DETECTED!");
+          usb_device_handle_t dev;
+          if (usb_host_device_open((usb_host_client_handle_t)arg, msg->new_dev.address, &dev) == ESP_OK) {
+            const usb_device_desc_t* dd;
+            usb_host_get_device_descriptor(dev, &dd);
+            char buf[64];
+            sprintf(buf, "VID=0x%04X PID=0x%04X", dd->idVendor, dd->idProduct);
+            add_debug(buf);
+            usb_host_device_close((usb_host_client_handle_t)arg, dev);
+          }
+        }
+      },
+      .callback_arg = (void*)client 
+    }
+  };
+  usb_host_client_register(&cc, &client);
+  
+  add_debug("[5] USB Client ready!");
+  add_debug("Attendez device...");
 }
 
 void loop() {
-  flir_uvc_task();
-  
-  // Mettre à jour le statut de connexion toutes les 2 secondes
-  if (millis() - last_update > 2000) {
-    last_update = millis();
-    
-    if (flir_uvc_connected()) {
-      if (!flir_connected) {
-        log_screen("FLIR One connecte!", TFT_GREEN);
-        flir_connected = true;
-      }
-    } else {
-      if (flir_connected) {
-        log_screen("FLIR One deconnecte!", TFT_RED);
-        flir_connected = false;
-      }
-    }
-  }
-  
-  delay(1);
+  delay(1000);
 }
