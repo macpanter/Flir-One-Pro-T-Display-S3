@@ -30,78 +30,146 @@ static void bulk_cb(usb_transfer_t* xfer) {
 
 static void client_event_cb(const usb_host_client_event_msg_t* msg, void* arg) {
   if (msg->event == USB_HOST_CLIENT_EVENT_NEW_DEV) {
-    Serial.println("[FLIR] NEW DEVICE DETECTED");
+    Serial.println("\n\n=== NEW DEVICE DETECTED ===");
     usb_device_handle_t dev;
     if (usb_host_device_open(s_client, msg->new_dev.address, &dev) != ESP_OK) {
-      Serial.println("[FLIR] Erreur: usb_host_device_open");
+      Serial.println("[FLIR] ERREUR: usb_host_device_open failed");
       return;
     }
+    
     const usb_device_desc_t* dd;
     usb_host_get_device_descriptor(dev, &dd);
-    Serial.printf("[FLIR] VID=0x%04X PID=0x%04X\n", dd->idVendor, dd->idProduct);
+    Serial.printf("[FLIR] Device: VID=0x%04X PID=0x%04X bcdDevice=0x%04X\n", 
+                  dd->idVendor, dd->idProduct, dd->bcdDevice);
+    Serial.printf("[FLIR] Classes: bDeviceClass=0x%02X bDeviceSubClass=0x%02X\n",
+                  dd->bDeviceClass, dd->bDeviceSubClass);
+    Serial.printf("[FLIR] Manufacturer=%d Product=%d Serial=%d\n",
+                  dd->iManufacturer, dd->iProduct, dd->iSerialNumber);
     
     if (dd->idVendor != FLIR_VID) {
-      Serial.printf("[FLIR] Mauvais VID (attendu 0x%04X)\n", FLIR_VID);
+      Serial.printf("[FLIR] ERREUR: Mauvais VID (attendu 0x%04X)\n", FLIR_VID);
       usb_host_device_close(s_client, dev);
       return;
     }
     
     s_dev = dev;
     
-    // Essayer de clamer l'interface 1
-    esp_err_t ret = usb_host_interface_claim(s_client, s_dev, 1, 1);
-    Serial.printf("[FLIR] usb_host_interface_claim ret=%d\n", ret);
-    
+    // Récupérer la configuration active
     const usb_config_desc_t* cd;
     usb_host_get_active_config_descriptor(s_dev, &cd);
     
-    Serial.printf("[FLIR] Config descriptor: wTotalLength=%d\n", cd->wTotalLength);
+    Serial.printf("\n[CONFIG] bConfigurationValue=%d wTotalLength=%d\n", 
+                  cd->bConfigurationValue, cd->wTotalLength);
+    Serial.printf("[CONFIG] bNumInterfaces=%d bmAttributes=0x%02X bMaxPower=%d\n",
+                  cd->bNumInterfaces, cd->bmAttributes, cd->bMaxPower);
     
-    uint8_t ep = 0;
+    // Parcourir TOUS les descripteurs
+    Serial.println("\n=== ALL DESCRIPTORS ===");
     int off = 0;
     auto dp = (const usb_standard_desc_t*)cd;
+    int interface_num = 0;
+    int endpoint_num = 0;
     
     while (off < cd->wTotalLength) {
-      Serial.printf("[FLIR] Descriptor at offset %d: type=0x%02X len=%d\n", 
-                    off, dp->bDescriptorType, dp->bLength);
+      Serial.printf("[DESC %d] offset=%d type=0x%02X length=%d\n", 
+                    (off / 7), off, dp->bDescriptorType, dp->bLength);
       
-      if (dp->bDescriptorType == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
+      if (dp->bDescriptorType == USB_B_DESCRIPTOR_TYPE_INTERFACE) {
+        auto ifd = (const usb_intf_desc_t*)dp;
+        interface_num++;
+        Serial.printf("  -> INTERFACE #%d: bInterfaceNumber=%d bAlternateSetting=%d\n",
+                      interface_num, ifd->bInterfaceNumber, ifd->bAlternateSetting);
+        Serial.printf("     bNumEndpoints=%d bInterfaceClass=0x%02X bInterfaceSubClass=0x%02X\n",
+                      ifd->bNumEndpoints, ifd->bInterfaceClass, ifd->bInterfaceSubClass);
+      }
+      else if (dp->bDescriptorType == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
         auto epd = (const usb_ep_desc_t*)dp;
-        Serial.printf("[FLIR]   ENDPOINT: addr=0x%02X attr=0x%02X\n", 
-                      epd->bEndpointAddress, epd->bmAttributes);
-        
-        // Chercher endpoint IN de type BULK
-        if ((epd->bEndpointAddress & 0x80) &&
-            ((epd->bmAttributes & 0x03) == USB_BM_ATTRIBUTES_XFER_BULK)) {
-          ep = epd->bEndpointAddress;
-          Serial.printf("[FLIR] BULK IN endpoint trouve: 0x%02X\n", ep);
-          break;
-        }
+        endpoint_num++;
+        Serial.printf("  -> ENDPOINT #%d: bEndpointAddress=0x%02X bmAttributes=0x%02X\n",
+                      endpoint_num, epd->bEndpointAddress, epd->bmAttributes);
+        Serial.printf("     wMaxPacketSize=%d bInterval=%d\n",
+                      epd->wMaxPacketSize, epd->bInterval);
       }
       
       off += dp->bLength;
       dp = (const usb_standard_desc_t*)((uint8_t*)dp + dp->bLength);
     }
     
-    if (!ep) {
-      Serial.println("[FLIR] ERREUR: Aucun endpoint BULK IN trouve!");
-      usb_host_device_close(s_client, s_dev);
-      s_dev = nullptr;
-      return;
+    Serial.println("\n=== CLAIMING INTERFACE ===");
+    // Essayer interface 0
+    for (int iface = 0; iface < cd->bNumInterfaces; iface++) {
+      Serial.printf("[CLAIM] Trying interface %d...\n", iface);
+      esp_err_t ret = usb_host_interface_claim(s_client, s_dev, iface, 0);
+      Serial.printf("[CLAIM] Interface %d result: %d\n", iface, ret);
+      
+      if (ret == ESP_OK) {
+        Serial.printf("[CLAIM] SUCCESS! Using interface %d\n", iface);
+        
+        // Chercher l'endpoint BULK IN
+        off = 0;
+        dp = (const usb_standard_desc_t*)cd;
+        uint8_t ep = 0;
+        int iface_count = 0;
+        
+        while (off < cd->wTotalLength) {
+          if (dp->bDescriptorType == USB_B_DESCRIPTOR_TYPE_INTERFACE) {
+            auto ifd = (const usb_intf_desc_t*)dp;
+            if (ifd->bInterfaceNumber == iface) {
+              iface_count++;
+              // Dans cette interface, chercher les endpoints
+              int ep_off = off + dp->bLength;
+              auto ep_dp = (const usb_standard_desc_t*)((uint8_t*)dp + dp->bLength);
+              
+              while (ep_off < cd->wTotalLength) {
+                if (ep_dp->bDescriptorType == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
+                  auto epd = (const usb_ep_desc_t*)ep_dp;
+                  Serial.printf("[EP] Found: addr=0x%02X attr=0x%02X\n", 
+                               epd->bEndpointAddress, epd->bmAttributes);
+                  
+                  // Chercher BULK IN
+                  if ((epd->bEndpointAddress & 0x80) &&
+                      ((epd->bmAttributes & 0x03) == USB_BM_ATTRIBUTES_XFER_BULK)) {
+                    ep = epd->bEndpointAddress;
+                    Serial.printf("[EP] BULK IN endpoint selected: 0x%02X\n", ep);
+                    break;
+                  }
+                } else if (ep_dp->bDescriptorType == USB_B_DESCRIPTOR_TYPE_INTERFACE) {
+                  break; // Next interface
+                }
+                ep_off += ep_dp->bLength;
+                ep_dp = (const usb_standard_desc_t*)((uint8_t*)ep_dp + ep_dp->bLength);
+              }
+              break;
+            }
+          }
+          off += dp->bLength;
+          dp = (const usb_standard_desc_t*)((uint8_t*)dp + dp->bLength);
+        }
+        
+        if (ep) {
+          Serial.printf("\n[TRANSFER] Allocating transfer for endpoint 0x%02X\n", ep);
+          usb_host_transfer_alloc(FLIR_FRAME_BYTES + 64, 0, &s_xfer);
+          s_xfer->device_handle    = s_dev;
+          s_xfer->bEndpointAddress = ep;
+          s_xfer->callback         = bulk_cb;
+          s_xfer->context          = nullptr;
+          s_xfer->num_bytes        = FLIR_FRAME_BYTES;
+          s_connected = true;
+          usb_host_transfer_submit(s_xfer);
+          Serial.println("[TRANSFER] Streaming started!");
+          return;
+        } else {
+          Serial.println("[ERROR] No BULK IN endpoint found!");
+        }
+      }
     }
     
-    usb_host_transfer_alloc(FLIR_FRAME_BYTES + 64, 0, &s_xfer);
-    s_xfer->device_handle    = s_dev;
-    s_xfer->bEndpointAddress = ep;
-    s_xfer->callback         = bulk_cb;
-    s_xfer->context          = nullptr;
-    s_xfer->num_bytes        = FLIR_FRAME_BYTES;
-    s_connected = true;
-    usb_host_transfer_submit(s_xfer);
-    Serial.println("[FLIR] Streaming demarre");
+    Serial.println("[FLIR] ERREUR: Could not claim any interface");
+    usb_host_device_close(s_client, s_dev);
+    s_dev = nullptr;
     
   } else if (msg->event == USB_HOST_CLIENT_EVENT_DEV_GONE) {
-    Serial.println("[FLIR] DEVICE DISCONNECTED");
+    Serial.println("\n=== DEVICE DISCONNECTED ===");
     s_connected = false;
     if (s_xfer) { usb_host_transfer_free(s_xfer); s_xfer = nullptr; }
     if (s_dev)  { usb_host_device_close(s_client, s_dev); s_dev = nullptr; }
@@ -118,13 +186,14 @@ static void usb_task(void* arg) {
 }
 
 void flir_uvc_init(flir_frame_cb_t cb) {
-  Serial.println("[FLIR] Initializing FLIR USB...");
+  Serial.println("\n[FLIR] Initializing FLIR USB subsystem...");
   s_cb = cb;
   usb_host_config_t cfg = { .intr_flags = ESP_INTR_FLAG_LEVEL1 };
   usb_host_install(&cfg);
-  Serial.println("[USB] Host installed");
+  Serial.println("[USB] Host library installed");
   
   xTaskCreatePinnedToCore(usb_task, "usb_host", 4096, nullptr, 5, nullptr, 0);
+  Serial.println("[USB] USB task created");
   
   usb_host_client_config_t cc = {
     .is_synchronous    = false,
@@ -132,7 +201,7 @@ void flir_uvc_init(flir_frame_cb_t cb) {
     .async = { .client_event_callback = client_event_cb, .callback_arg = nullptr }
   };
   usb_host_client_register(&cc, &s_client);
-  Serial.println("[USB] Client registered");
+  Serial.println("[USB] Client registered - READY FOR DEVICES\n");
 }
 
 void flir_uvc_task() { if (s_client) usb_host_client_handle_events(s_client, 0); }
