@@ -27,34 +27,26 @@ void onFlirFrame(const uint8_t* data, size_t len) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Boot...");
-
   pinMode(15, OUTPUT);
   digitalWrite(15, HIGH);
   delay(200);
-
-  Serial.println("Init LCD...");
   lcd.init();
   lcd.setRotation(1);
   lcd.setBrightness(255);
-
   lcd.fillScreen(TFT_RED);
   delay(500);
   lcd.fillScreen(TFT_GREEN);
   delay(500);
   lcd.fillScreen(TFT_BLUE);
   delay(500);
-
   lcd.fillScreen(TFT_BLACK);
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  lcd.setTextColor(TFT_CYAN, TFT_BLACK);
   lcd.setTextSize(2);
-  lcd.drawString("OK!", 10, 10);
+  lcd.drawString("FLIR Bridge", 10, 10);
+  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   lcd.setTextSize(1);
   lcd.drawString("Connecte le FLIR One via OTG...", 10, 40);
-
-  Serial.println("LCD OK");
   flir_uvc_init(onFlirFrame);
-  Serial.println("FLIR init OK");
 }
 
 void loop() {
