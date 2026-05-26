@@ -22,6 +22,10 @@ void onFlirFrame(const uint8_t* data, size_t len) {
     FLIR_FRAME_H,
     frame_rgb
   );
+  // Affiche confirmation sur écran
+  lcd.setCursor(10, 60);
+  lcd.setTextColor(TFT_GREEN, TFT_BLACK);
+  lcd.println("FRAME RECU !");
 }
 
 void setup() {
@@ -41,7 +45,17 @@ void setup() {
   lcd.setTextSize(1);
   lcd.setCursor(10, 40);
   lcd.println("Connecte le FLIR One via OTG...");
+
+  // Affiche statut USB sur écran
+  lcd.setCursor(10, 60);
+  lcd.setTextColor(TFT_YELLOW, TFT_BLACK);
+  lcd.println("Init USB host...");
+
   flir_uvc_init(onFlirFrame);
+
+  lcd.setCursor(10, 60);
+  lcd.setTextColor(TFT_GREEN, TFT_BLACK);
+  lcd.println("USB host OK - attente FLIR");
 }
 
 void loop() {
